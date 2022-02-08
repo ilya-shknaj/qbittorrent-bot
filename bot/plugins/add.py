@@ -8,7 +8,7 @@ import hashlib
 from typing import Optional
 
 from telegram import Update, BotCommand, ParseMode, User, Bot
-from telegram.ext import Filters, MessageHandler, CallbackContext
+from telegram.ext import Filters, MessageHandler, CallbackContext, CallbackQueryHandler
 import bencoding
 
 from bot.qbtinstance import qb
@@ -20,6 +20,9 @@ from config import config
 
 logger = logging.getLogger(__name__)
 
+DOWNLOAD_FOLDERS_PRESETS = ["Downloads", "Series", "Movies"]
+
+last_torrent_url = None
 
 def notify_addition(current_chat_id: int, bot: Bot, user: User, torrent_description: str):
     if not config.notifications.added_torrents:
@@ -39,13 +42,15 @@ def notify_addition(current_chat_id: int, bot: Bot, user: User, torrent_descript
     )
 
 
-def get_qbt_request_kwargs() -> dict:
+def get_qbt_request_kwargs(download_folder) -> dict:
     kwargs = dict()
     if config.qbittorrent.added_torrents_tag:
         # string with tags separated by ",", but since it's only one tehre's no need to join
         kwargs["tags"] = config.qbittorrent.added_torrents_tag
     if config.qbittorrent.added_torrents_category:
         kwargs["category"] = config.qbittorrent.added_torrents_category
+    if download_folder is not None:
+        kwargs["savepath"] = qb.get_default_save_path() + "../" + download_folder
 
     return kwargs
 
@@ -55,25 +60,10 @@ def get_qbt_request_kwargs() -> dict:
 def add_from_magnet(update: Update, context: CallbackContext):
     logger.info('magnet url from %s', update.effective_user.first_name)
 
-    magnet_link = update.message.text
+    global last_torrent_url
+    last_torrent_url = update.message.text
 
-    kwargs = get_qbt_request_kwargs()
-
-    qb.download_from_link(magnet_link, **kwargs)
-    # always returns an empty json:
-    # https://python-qbittorrent.readthedocs.io/en/latest/modules/api.html#qbittorrent.client.Client.download_from_link
-
-    torrent_hash = u.hash_from_magnet(magnet_link)
-    logger.info('torrent hash from regex: %s', torrent_hash)
-
-    update.message.reply_html(
-        'Magnet added',
-        reply_markup=kb.short_markup(torrent_hash),
-        quote=True
-    )
-
-    notify_addition(update.effective_chat.id, context.bot, update.effective_user, torrent_hash)
-
+    ask_download_folder(update, 'magnet')
 
 @u.check_permissions(required_permission=Permissions.WRITE)
 @u.failwithmessage
@@ -97,7 +87,7 @@ def add_from_file(update: Update, context: CallbackContext):
     file_path = './downloads/{}'.format(document.file_name)
     torrent_file.download(file_path)
 
-    kwargs = get_qbt_request_kwargs()
+    kwargs = get_qbt_request_kwargs(None)
 
     with open(file_path, 'rb') as f:
         # https://stackoverflow.com/a/46270711
@@ -126,19 +116,55 @@ def add_from_file(update: Update, context: CallbackContext):
 def add_from_url(update: Update, context: CallbackContext):
     logger.info('url from %s', update.effective_user.first_name)
 
-    torrent_url = update.message.text
+    global last_torrent_url
+    last_torrent_url = update.message.text
 
-    kwargs = get_qbt_request_kwargs()
+    ask_download_folder(update, 'link')
 
-    qb.download_from_link(torrent_url, **kwargs)
-    # always returns an empty json:
-    # https://python-qbittorrent.readthedocs.io/en/latest/modules/api.html#qbittorrent.client.Client.download_from_link
+@u.check_permissions(required_permission=Permissions.READ)
+@u.failwithmessage
+def ask_download_folder(update: Update, download_method):
+    logger.info('ask download folder', update.message.from_user.first_name)
 
-    update.message.reply_text('Torrent url added', quote=True)
+    # if re.search(r'[^^(?!downloadFoler).*$]', update.message.text, re.I):
+    logger.info('showing download folders presets')
+    reply_markup = kb.download_folders(DOWNLOAD_FOLDERS_PRESETS, download_method)
+    update.message.reply_markdown('Select download folder', reply_markup=reply_markup)
 
-    notify_addition(update.effective_chat.id, context.bot, update.effective_user, torrent_url)
 
+@u.check_permissions(required_permission=Permissions.WRITE)
+@u.failwithmessage
+def start_download_to_folder_callback(update: Update, context: CallbackContext):
+    download_folder = context.match[2]
+    download_method = context.match[3]
+
+    logger.info('start download to folder ', download_folder)
+    logger.info('download method ', download_method)
+    global last_torrent_url
+    kwargs = get_qbt_request_kwargs(download_folder)
+
+    if download_method == "link":
+        qb.download_from_link(last_torrent_url, **kwargs)
+        # always returns an empty json:
+        # https://python-qbittorrent.readthedocs.io/en/latest/modules/api.html#qbittorrent.client.Client.download_from_link
+
+        update.callback_query.answer('Torrent url added')
+
+        notify_addition(update.effective_chat.id, context.bot, update.effective_user, last_torrent_url)
+    if download_method=="magnet":
+        qb.download_from_link(last_torrent_url, **kwargs)
+        # always returns an empty json:
+        # https://python-qbittorrent.readthedocs.io/en/latest/modules/api.html#qbittorrent.client.Client.download_from_link
+
+        torrent_hash = u.hash_from_magnet(last_torrent_url)
+        logger.info('torrent hash from regex: %s', torrent_hash)
+
+        update.callback_query.answer('Magnet added')
+
+        notify_addition(update.effective_chat.id, context.bot, update.effective_user, torrent_hash)
+    last_torrent_url = None
 
 updater.add_handler(MessageHandler(Filters.document, add_from_file))
 updater.add_handler(MessageHandler(Filters.text & Filters.regex(r'^magnet:\?.*'), add_from_magnet))
-updater.add_handler(MessageHandler(Filters.text & Filters.regex(r"^https?:\/\/.*(jackett|\.torren|\/torrent).*"), add_from_url))
+updater.add_handler(MessageHandler(Filters.text & Filters.regex(r"^https?:\/\/.*(jackett|\.torren|\/torrent|td.php).*"), add_from_url))
+updater.add_handler(CallbackQueryHandler(start_download_to_folder_callback, pattern=r'(downloadFolder:)(.*), downloadMethod:(.*)$'))

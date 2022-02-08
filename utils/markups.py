@@ -154,3 +154,13 @@ def alternative_download_limits(values: [list, tuple]):
         markup[0].append(InlineKeyboardButton('{} kbs'.format(kbs), callback_data='altdown:{}'.format(kbs)))
 
     return InlineKeyboardMarkup(markup)
+
+
+def download_folders(values: [list, tuple], download_method):
+    markup = [[]]
+    for folder in values:
+        markup[0].append(InlineKeyboardButton(folder,
+                                              callback_data='downloadFolder:{}, downloadMethod:{}'.format(
+                                                  folder, download_method)))
+
+    return InlineKeyboardMarkup(markup)

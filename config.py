@@ -14,11 +14,11 @@ config = toml.load('config.toml', AttrDict)
 
 def exit_with_message(message: str):
     print(f"config: {message}")
-    print(f"see 'config.example.toml' for more details on how to fill the required values in 'config.toml'")
+    print(f"see 'config.toml' for more details on how to fill the required values in 'config.toml'")
     sys.exit(0)
 
 
-example_config = toml.load('config.example.toml')
+example_config = toml.load('config.toml')
 
 for config_section, example_config_section_dict in example_config.items():
     if config_section not in config:
